@@ -77,7 +77,7 @@ namespace c_sharp_video_windowform
 
             double audioDuration = GetAudioDuration(mp3File);
 
-            string scaledImage = PreScaleImage(imageFile, 1920, 820); // 21:9 ratio
+            string scaledImage = PreScaleImage(imageFile, 1280, 720); // 21:9 ratio 
 
             // Create video from image + audio
             RunFFmpeg(
@@ -171,16 +171,20 @@ namespace c_sharp_video_windowform
             File.Delete(listFile);
         }
 
-        string PreScaleImage(string img, int w, int h)
+         string PreScaleImage(string img, int w, int h)
         {
             string scaled = Path.Combine(Path.GetTempPath(), $"scaled_{Guid.NewGuid():N}.png");
 
+            // Correct FFmpeg command: scale to fill the target size, then crop excess
             RunFFmpeg(
-                $"-i \"{img}\" -vf \"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}\" -y \"{scaled}\""
+                $"-i \"{img}\" -vf " +
+                $"\"scale='if(gt(a,{(double)w / h}),-1,{w})':'if(gt(a,{(double)w / h}),{h},-1)',crop={w}:{h},format=yuv420p\" " +
+                $"-y \"{scaled}\""
             );
 
             return scaled;
         }
+
 
         string FormatTime(TimeSpan t)
         {
