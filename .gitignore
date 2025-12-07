@@ -1,0 +1,22 @@
+# Build outputs
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+
+# VS Code
+.vscode/
+
+# Visual Studio
+*.vs/
+
+# Files to ignore
+*.txt
+*.mp4
+*.wav
+*.mp3
+*.srt
+*.png
+*.jpg
