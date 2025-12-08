@@ -77,7 +77,23 @@ namespace c_sharp_video_windowform
 
             double audioDuration = GetAudioDuration(mp3File);
 
-            string scaledImage = PreScaleImage(imageFile, 1280, 720); // 21:9 ratio 
+            int videoWidth = 1920;
+            int videoHeight = 820;
+
+            // Check if input image size matches target video size
+            string scaledImage;
+            if (!IsImageSizeMatch(imageFile, videoWidth, videoHeight))
+            {
+                // Option 1: warn user
+                MessageBox.Show($"Input image must be exactly {videoWidth}x{videoHeight} pixels. Automatically resizing it.");
+
+                // Option 2: resize automatically
+                scaledImage = PreScaleImageToExactSize(imageFile, videoWidth, videoHeight);
+            }
+            else
+            {
+                scaledImage = imageFile; // no scaling needed
+            }
 
             // Create video from image + audio
             RunFFmpeg(
@@ -111,6 +127,14 @@ namespace c_sharp_video_windowform
         {
             using var reader = new AudioFileReader(audioFile);
             return reader.TotalTime.TotalSeconds;
+        }
+
+        bool IsImageSizeMatch(string imgPath, int targetWidth, int targetHeight)
+        {
+            using (var img = Image.FromFile(imgPath))
+            {
+                return img.Width == targetWidth && img.Height == targetHeight;
+            }
         }
 
         void GenerateAudioAndSrt(string text, string mp3, string srt, int wordsPerBlock)
@@ -171,15 +195,13 @@ namespace c_sharp_video_windowform
             File.Delete(listFile);
         }
 
-         string PreScaleImage(string img, int w, int h)
+        string PreScaleImageToExactSize(string img, int targetWidth, int targetHeight)
         {
             string scaled = Path.Combine(Path.GetTempPath(), $"scaled_{Guid.NewGuid():N}.png");
 
-            // Correct FFmpeg command: scale to fill the target size, then crop excess
+            // Simple scale to exact size (may stretch if aspect ratio differs)
             RunFFmpeg(
-                $"-i \"{img}\" -vf " +
-                $"\"scale='if(gt(a,{(double)w / h}),-1,{w})':'if(gt(a,{(double)w / h}),{h},-1)',crop={w}:{h},format=yuv420p\" " +
-                $"-y \"{scaled}\""
+                $"-i \"{img}\" -vf \"scale={targetWidth}:{targetHeight},format=yuv420p\" -y \"{scaled}\""
             );
 
             return scaled;
