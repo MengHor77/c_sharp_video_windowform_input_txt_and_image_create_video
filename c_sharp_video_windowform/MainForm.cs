@@ -78,7 +78,7 @@ namespace c_sharp_video_windowform
             double audioDuration = GetAudioDuration(mp3File);
 
             int videoWidth = 1920;
-            int videoHeight = 820;
+            int videoHeight = 912;
 
             // Check if input image size matches target video size
             string scaledImage;
