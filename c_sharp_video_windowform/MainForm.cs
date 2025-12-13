@@ -1,10 +1,11 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Text;
-using NAudio.Wave;
-using System.Drawing;
 using System.Windows.Forms;
+using NAudio.Wave;
 
 namespace c_sharp_video_windowform
 {
@@ -50,9 +51,7 @@ namespace c_sharp_video_windowform
             }
 
             lblStatus.Text = "Generating video, please wait...";
-
             await System.Threading.Tasks.Task.Run(() => GenerateVideo(txtFile, imageFile));
-
             lblStatus.Text = "✅ Video generated successfully!";
         }
 
@@ -65,23 +64,16 @@ namespace c_sharp_video_windowform
             string outputVideo = Path.Combine(outputFolder, Path.GetFileNameWithoutExtension(txtFile) + "_VIDEO.mp4");
             string srtFile = Path.Combine(outputFolder, Path.GetFileNameWithoutExtension(txtFile) + ".srt");
 
-            string tempWav = Path.Combine(Path.GetTempPath(), "audio.wav");
-            string tempMp3 = Path.Combine(Path.GetTempPath(), "audio.mp3");
             string tempVideo = Path.Combine(Path.GetTempPath(), "tempVideo.mp4");
-
-            // 1️⃣ Generate TTS audio
-            GenerateHumanAudio(text, tempWav);
-
-            // 2️⃣ Convert WAV to MP3 for FFmpeg
-            RunFFmpeg($"-i \"{tempWav}\" -c:a libmp3lame -q:a 4 -y \"{tempMp3}\"");
-
-            // 3️⃣ Generate dynamic SRT
-            GenerateSrtFromText(text, srtFile, GetAudioDuration(tempMp3));
 
             int videoWidth = 1920;
             int videoHeight = 1080;
 
-            // 4️⃣ Resize image if needed
+            // 1️⃣ Generate human-like audio and SRT
+            string finalAudio = Path.Combine(Path.GetTempPath(), "final_audio.wav");
+            GenerateAudioAndSrtByPhrase(text, finalAudio, srtFile);
+
+            // 2️⃣ Resize image if needed
             string scaledImage = imageFile;
             if (!IsImageSizeMatch(imageFile, videoWidth, videoHeight))
             {
@@ -89,14 +81,14 @@ namespace c_sharp_video_windowform
                 scaledImage = PreScaleImageToExactSize(imageFile, videoWidth, videoHeight);
             }
 
-            // 5️⃣ Create video with audio
+            // 3️⃣ Create video with audio
             RunFFmpeg(
-                $"-loop 1 -i \"{scaledImage}\" -i \"{tempMp3}\" " +
+                $"-loop 1 -i \"{scaledImage}\" -i \"{finalAudio}\" " +
                 $"-c:v libx264 -preset fast -crf 23 -tune stillimage " +
-                $"-c:a aac -b:a 192k -pix_fmt yuv420p -t {GetAudioDuration(tempMp3)} -y \"{tempVideo}\""
+                $"-c:a aac -b:a 192k -pix_fmt yuv420p -t {GetAudioDuration(finalAudio)} -y \"{tempVideo}\""
             );
 
-            // 6️⃣ Overlay subtitles
+            // 4️⃣ Overlay subtitles
             try
             {
                 string srtEscaped = srtFile.Replace("\\", "/").Replace(":", "\\:").Replace("'", "\\'");
@@ -116,10 +108,9 @@ namespace c_sharp_video_windowform
                 MessageBox.Show("⚠ Subtitles failed to overlay. Video created without subtitles.");
             }
 
-            // 7️⃣ Cleanup temp files
+            // 5️⃣ Cleanup temp files
             TryDeleteFile(tempVideo);
-            TryDeleteFile(tempMp3);
-            TryDeleteFile(tempWav);
+            TryDeleteFile(finalAudio);
             if (scaledImage != imageFile) TryDeleteFile(scaledImage);
 
             MessageBox.Show($"✅ Video created successfully:\n{outputVideo}\n✅ SRT created:\n{srtFile}");
@@ -127,26 +118,83 @@ namespace c_sharp_video_windowform
 
         // ====== UTILITIES ======
 
-        void GenerateHumanAudio(string text, string outputWav)
+        void GenerateAudioAndSrtByPhrase(string text, string finalAudio, string srtFile)
         {
-            string ttsExe = @"C:\Users\USER\AppData\Local\Programs\Python\Python310\Scripts\tts.exe";
-            string args = $"--text \"{text}\" --model_name tts_models/en/ljspeech/tacotron2-DDC --vocoder_name vocoder_models/en/ljspeech/hifigan_v2 --out_path \"{outputWav}\"";
+            char[] separators = new char[] { '.', ',', '?', '!', ';', ':' };
+            string[] chunks = text.Split(separators, StringSplitOptions.RemoveEmptyEntries);
 
-            Process p = new Process();
-            p.StartInfo.FileName = ttsExe;
-            p.StartInfo.Arguments = args;
-            p.StartInfo.UseShellExecute = false;
-            p.StartInfo.RedirectStandardOutput = true;
-            p.StartInfo.RedirectStandardError = true;
-            p.StartInfo.CreateNoWindow = true;
-            p.Start();
+            string tempFolder = Path.Combine(Path.GetTempPath(), "tts_chunks");
+            Directory.CreateDirectory(tempFolder);
 
-            string output = p.StandardOutput.ReadToEnd();
-            string error = p.StandardError.ReadToEnd();
-            p.WaitForExit();
+            List<string> chunkFiles = new List<string>();
+            List<string> chunkTexts = new List<string>();
 
-            if (p.ExitCode != 0)
-                throw new Exception("TTS failed: " + error);
+            int i = 0;
+            foreach (var chunk in chunks)
+            {
+                string trimmed = chunk.Trim();
+                if (trimmed.Length == 0) continue;
+
+                // Restore punctuation if available
+                int idx = text.IndexOf(trimmed) + trimmed.Length;
+                if (idx < text.Length && Array.Exists(separators, c => c == text[idx]))
+                    trimmed += text[idx];
+
+                string chunkWav = Path.Combine(tempFolder, $"chunk_{i}.wav");
+                chunkFiles.Add(chunkWav);
+                chunkTexts.Add(trimmed);
+
+                // Run TTS for this chunk
+                string ttsExe = @"C:\Users\USER\AppData\Local\Programs\Python\Python310\Scripts\tts.exe";
+                string args = $"--text \"{trimmed}\" --model_name tts_models/en/ljspeech/tacotron2-DDC --vocoder_name vocoder_models/en/ljspeech/hifigan_v2 --out_path \"{chunkWav}\"";
+
+                Process p = new Process();
+                p.StartInfo.FileName = ttsExe;
+                p.StartInfo.Arguments = args;
+                p.StartInfo.UseShellExecute = false;
+                p.StartInfo.RedirectStandardOutput = true;
+                p.StartInfo.RedirectStandardError = true;
+                p.StartInfo.CreateNoWindow = true;
+                p.Start();
+                p.WaitForExit();
+
+                i++;
+            }
+
+            // Merge all chunk WAV files into finalAudio
+            using (var waveFileWriter = new WaveFileWriter(finalAudio, new WaveFileReader(chunkFiles[0]).WaveFormat))
+            {
+                foreach (var f in chunkFiles)
+                {
+                    using var reader = new WaveFileReader(f);
+                    reader.CopyTo(waveFileWriter);
+                }
+            }
+
+            // Generate SRT
+            StringBuilder sb = new StringBuilder();
+            TimeSpan currentTime = TimeSpan.Zero;
+            int index = 1;
+
+            foreach (var f in chunkFiles)
+            {
+                double duration = GetAudioDuration(f);
+                TimeSpan endTime = currentTime + TimeSpan.FromSeconds(duration);
+
+                sb.AppendLine(index.ToString());
+                sb.AppendLine($"{FormatTime(currentTime)} --> {FormatTime(endTime)}");
+                sb.AppendLine(chunkTexts[index - 1]);
+                sb.AppendLine();
+
+                currentTime = endTime;
+                index++;
+            }
+
+            File.WriteAllText(srtFile, sb.ToString());
+
+            // Cleanup individual chunks
+            foreach (var f in chunkFiles)
+                TryDeleteFile(f);
         }
 
         double GetAudioDuration(string audioFile)
@@ -157,10 +205,8 @@ namespace c_sharp_video_windowform
 
         bool IsImageSizeMatch(string imgPath, int targetWidth, int targetHeight)
         {
-            using (var img = Image.FromFile(imgPath))
-            {
-                return img.Width == targetWidth && img.Height == targetHeight;
-            }
+            using var img = Image.FromFile(imgPath);
+            return img.Width == targetWidth && img.Height == targetHeight;
         }
 
         string PreScaleImageToExactSize(string img, int targetWidth, int targetHeight)
@@ -182,72 +228,15 @@ namespace c_sharp_video_windowform
             p.StartInfo.RedirectStandardOutput = true;
             p.StartInfo.CreateNoWindow = true;
             p.Start();
-
             string stderr = p.StandardError.ReadToEnd();
             p.WaitForExit();
-
             if (p.ExitCode != 0)
                 throw new Exception("FFmpeg failed: " + stderr);
         }
 
         void TryDeleteFile(string path)
         {
-            try { if (File.Exists(path)) File.Delete(path); }
-            catch { }
-        }
-
-        // ====== DYNAMIC WORD-LEVEL SUBTITLES ======
-        void GenerateSrtFromText(string text, string srtFile, double audioDuration)
-        {
-            StringBuilder sb = new StringBuilder();
-
-            // Split text into sentences using punctuation.
-            string[] sentences = text
-                .Replace("\r", " ")
-                .Replace("\n", " ")
-                .Split(new[] { '.', '?', '!' }, StringSplitOptions.RemoveEmptyEntries);
-
-            // Add punctuation back (because Split removes it)
-            List<string> finalSentences = new List<string>();
-            foreach (string s in sentences)
-            {
-                string trimmed = s.Trim();
-                if (trimmed.Length == 0) continue;
-
-                // Detect punctuation from original text
-                int index = text.IndexOf(trimmed) + trimmed.Length;
-                char end = '.';
-                if (index < text.Length)
-                {
-                    if (text[index] == '.' || text[index] == '?' || text[index] == '!')
-                        end = text[index];
-                }
-
-                finalSentences.Add(trimmed + end);
-            }
-
-            // Calculate total sentence count
-            int total = finalSentences.Count;
-            double secPerSentence = audioDuration / total;
-
-            TimeSpan currentTime = TimeSpan.Zero;
-            int srtIndex = 1;
-
-            // Create SRT timing block per sentence
-            foreach (string sentence in finalSentences)
-            {
-                TimeSpan endTime = currentTime + TimeSpan.FromSeconds(secPerSentence);
-
-                sb.AppendLine(srtIndex.ToString());
-                sb.AppendLine($"{FormatTime(currentTime)} --> {FormatTime(endTime)}");
-                sb.AppendLine(sentence);
-                sb.AppendLine();
-
-                currentTime = endTime;
-                srtIndex++;
-            }
-
-            File.WriteAllText(srtFile, sb.ToString());
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
     }
 }
