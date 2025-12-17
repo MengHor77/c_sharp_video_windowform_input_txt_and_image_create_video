@@ -6,6 +6,7 @@ using System.Speech.Synthesis;
 using NAudio.Wave;
 using System.Drawing;
 using System.Windows.Forms;
+using System.Threading.Tasks;
 
 namespace c_sharp_video_windowform
 {
@@ -21,8 +22,10 @@ namespace c_sharp_video_windowform
         // SELECT TEXT FILE
         private void BtnSelectTxt_Click(object sender, EventArgs e)
         {
-            OpenFileDialog ofd = new OpenFileDialog();
-            ofd.Filter = "Text Files (*.txt)|*.txt";
+            using OpenFileDialog ofd = new OpenFileDialog
+            {
+                Filter = "Text Files (*.txt)|*.txt"
+            };
 
             if (ofd.ShowDialog() == DialogResult.OK)
                 txtTextFile.Text = ofd.FileName;
@@ -31,8 +34,10 @@ namespace c_sharp_video_windowform
         // SELECT IMAGE FILE
         private void BtnSelectImage_Click(object sender, EventArgs e)
         {
-            OpenFileDialog ofd = new OpenFileDialog();
-            ofd.Filter = "Image Files (*.png;*.jpg)|*.png;*.jpg";
+            using OpenFileDialog ofd = new OpenFileDialog
+            {
+                Filter = "Image Files (*.png;*.jpg)|*.png;*.jpg"
+            };
 
             if (ofd.ShowDialog() == DialogResult.OK)
                 txtImageFile.Text = ofd.FileName;
@@ -52,27 +57,34 @@ namespace c_sharp_video_windowform
 
             lblStatus.Text = "Generating video, please wait...";
 
-            await Task.Run(() => GenerateVideo(txtFile, imageFile));
-
-            lblStatus.Text = "✅ Video generated successfully!";
+            try
+            {
+                await Task.Run(() => GenerateVideo(txtFile, imageFile));
+                lblStatus.Text = "✅ Video generated successfully!";
+            }
+            catch (Exception ex)
+            {
+                lblStatus.Text = "❌ Error!";
+                MessageBox.Show(ex.Message);
+            }
         }
 
         private void GenerateVideo(string txtFile, string imageFile)
         {
             string text = File.ReadAllText(txtFile);
 
-            // Determine output video path
-            string outputFolder = Path.GetDirectoryName(txtFile); // save in same folder as input txt
-            string outputVideo = Path.Combine(outputFolder, Path.GetFileNameWithoutExtension(txtFile) + "_VIDEO.mp4");
+            string outputFolder = Path.GetDirectoryName(txtFile);
+            string outputVideo = Path.Combine(
+                outputFolder,
+                Path.GetFileNameWithoutExtension(txtFile) + "_VIDEO.mp4");
 
-            // Save SRT in the same folder as the video
-            string srtFile = Path.Combine(outputFolder, Path.GetFileNameWithoutExtension(txtFile) + ".srt");
+            string srtFile = Path.Combine(
+                outputFolder,
+                Path.GetFileNameWithoutExtension(txtFile) + ".srt");
 
-            // MP3 can stay in temp
             string mp3File = Path.Combine(Path.GetTempPath(), "audio.mp3");
             string tempVideo = Path.Combine(Path.GetTempPath(), "tempVideo.mp4");
 
-            // Generate audio and subtitles
             GenerateAudioAndSrt(text, mp3File, srtFile, 10);
 
             double audioDuration = GetAudioDuration(mp3File);
@@ -80,46 +92,46 @@ namespace c_sharp_video_windowform
             int videoWidth = 1920;
             int videoHeight = 1080;
 
-            // Check if input image size matches target video size
-            string scaledImage;
+            string scaledImage = imageFile;
+            bool isTempScaledImage = false;
+
             if (!IsImageSizeMatch(imageFile, videoWidth, videoHeight))
             {
-                // Option 1: warn user
-                MessageBox.Show($"Input image must be exactly {videoWidth}x{videoHeight} pixels. Automatically resizing it.");
+                MessageBox.Show(
+                    $"Input image must be exactly {videoWidth}x{videoHeight}. It will be resized.");
 
-                // Option 2: resize automatically
                 scaledImage = PreScaleImageToExactSize(imageFile, videoWidth, videoHeight);
-            }
-            else
-            {
-                scaledImage = imageFile; // no scaling needed
+                isTempScaledImage = true;
             }
 
-            // Create video from image + audio
             RunFFmpeg(
                 $"-loop 1 -i \"{scaledImage}\" -i \"{mp3File}\" " +
                 $"-c:v libx264 -preset fast -crf 23 -tune stillimage " +
-                $"-c:a aac -b:a 192k -pix_fmt yuv420p -t {audioDuration} -y \"{tempVideo}\""
+                $"-c:a aac -b:a 192k -pix_fmt yuv420p " +
+                $"-t {audioDuration} -y \"{tempVideo}\""
             );
 
-            // Overlay subtitles
             string srtEscaped = srtFile.Replace("\\", "\\\\").Replace(":", "\\:");
+
             RunFFmpeg(
                 $"-i \"{tempVideo}\" -vf " +
                 $"\"subtitles='{srtEscaped}':force_style=" +
-                $"'FontName=Arial,FontSize=26,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
-                $"BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=30'\" " +
-                $"-c:v libx264 -crf 23 -preset fast -c:a copy -y \"{outputVideo}\""
+                $"'FontName=Arial,FontSize=26,PrimaryColour=&H00FFFFFF," +
+                $"OutlineColour=&H00000000,BorderStyle=1,Outline=3," +
+                $"Shadow=0,Alignment=2,MarginV=30'\" " +
+                $"-c:v libx264 -crf 23 -preset fast -c:a copy " +
+                $"-y \"{outputVideo}\""
             );
 
             // Cleanup
-            File.Delete(tempVideo);
-            File.Delete(mp3File);
-            File.Delete(scaledImage);
+            if (File.Exists(tempVideo)) File.Delete(tempVideo);
+            if (File.Exists(mp3File)) File.Delete(mp3File);
+            if (isTempScaledImage && File.Exists(scaledImage)) File.Delete(scaledImage);
 
-            MessageBox.Show($"-1 Video  create successful! in : {outputVideo} \n\n -2 SRT Created successful! in :{srtFile}");
+            MessageBox.Show(
+                $"1️⃣ Video created successfully:\n{outputVideo}\n\n" +
+                $"2️⃣ SRT created successfully:\n{srtFile}");
         }
-
 
         // ========== UTILITIES ==========
 
@@ -131,10 +143,8 @@ namespace c_sharp_video_windowform
 
         bool IsImageSizeMatch(string imgPath, int targetWidth, int targetHeight)
         {
-            using (var img = Image.FromFile(imgPath))
-            {
-                return img.Width == targetWidth && img.Height == targetHeight;
-            }
+            using var img = Image.FromFile(imgPath);
+            return img.Width == targetWidth && img.Height == targetHeight;
         }
 
         void GenerateAudioAndSrt(string text, string mp3, string srt, int wordsPerBlock)
@@ -143,19 +153,28 @@ namespace c_sharp_video_windowform
             TimeSpan currentTime = TimeSpan.Zero;
             int index = 1;
 
-            string[] sentences = text.Split(new[] { '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries);
             var blockWavs = new System.Collections.Generic.List<string>();
 
-            foreach (var s in sentences)
+            string[] sentences = text.Split(
+                new[] { '.', '!', '?' },
+                StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (string sentence in sentences)
             {
-                string[] words = s.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                string[] words = sentence.Trim()
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
                 for (int i = 0; i < words.Length; i += wordsPerBlock)
                 {
-                    int end = Math.Min(i + wordsPerBlock, words.Length);
-                    string block = string.Join(" ", words, i, end - i);
+                    string block = string.Join(
+                        " ",
+                        words,
+                        i,
+                        Math.Min(wordsPerBlock, words.Length - i));
 
-                    string wav = Path.Combine(Path.GetTempPath(), $"block_{Guid.NewGuid():N}.wav");
+                    string wav = Path.Combine(
+                        Path.GetTempPath(),
+                        $"block_{Guid.NewGuid():N}.wav");
 
                     using (var synth = new SpeechSynthesizer())
                     {
@@ -185,28 +204,34 @@ namespace c_sharp_video_windowform
             File.WriteAllText(srt, sb.ToString());
 
             string listFile = Path.Combine(Path.GetTempPath(), "concat.txt");
+
             using (var w = new StreamWriter(listFile))
-                foreach (var f in blockWavs)
+                foreach (string f in blockWavs)
                     w.WriteLine($"file '{f}'");
 
-            RunFFmpeg($"-f concat -safe 0 -i \"{listFile}\" -c:a libmp3lame -q:a 4 -y \"{mp3}\"");
+            RunFFmpeg(
+                $"-f concat -safe 0 -i \"{listFile}\" " +
+                $"-c:a libmp3lame -q:a 4 -y \"{mp3}\"");
 
-            foreach (var f in blockWavs) File.Delete(f);
-            File.Delete(listFile);
+            foreach (string f in blockWavs)
+                if (File.Exists(f)) File.Delete(f);
+
+            if (File.Exists(listFile)) File.Delete(listFile);
         }
 
         string PreScaleImageToExactSize(string img, int targetWidth, int targetHeight)
         {
-            string scaled = Path.Combine(Path.GetTempPath(), $"scaled_{Guid.NewGuid():N}.png");
+            string scaled = Path.Combine(
+                Path.GetTempPath(),
+                $"scaled_{Guid.NewGuid():N}.png");
 
-            // Simple scale to exact size (may stretch if aspect ratio differs)
             RunFFmpeg(
-                $"-i \"{img}\" -vf \"scale={targetWidth}:{targetHeight},format=yuv420p\" -y \"{scaled}\""
-            );
+                $"-i \"{img}\" -vf " +
+                $"\"scale={targetWidth}:{targetHeight},format=yuv420p\" " +
+                $"-y \"{scaled}\"");
 
             return scaled;
         }
-
 
         string FormatTime(TimeSpan t)
         {
@@ -215,20 +240,20 @@ namespace c_sharp_video_windowform
 
         void RunFFmpeg(string args)
         {
-            Process p = new Process();
+            using Process p = new Process();
             p.StartInfo.FileName = ffmpegPath;
             p.StartInfo.Arguments = args;
             p.StartInfo.UseShellExecute = false;
             p.StartInfo.RedirectStandardError = true;
             p.StartInfo.RedirectStandardOutput = true;
             p.StartInfo.CreateNoWindow = true;
-            p.Start();
 
+            p.Start();
             string stderr = p.StandardError.ReadToEnd();
             p.WaitForExit();
 
             if (p.ExitCode != 0)
-                throw new Exception("FFmpeg failed: " + stderr);
+                throw new Exception("FFmpeg failed:\n" + stderr);
         }
     }
 }
